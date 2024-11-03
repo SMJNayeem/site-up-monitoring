@@ -1,0 +1,13 @@
+[Unit]
+Description=Customer Sites Monitor
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node path/to/monitor.js
+Restart=always
+User=root
+Environment=NODE_ENV=production
+WorkingDirectory=path/to/site-monitor
+
+[Install]
+WantedBy=multi-user.target
