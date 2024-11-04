@@ -81,7 +81,7 @@ async function checkSite(domain) {
                 port: 443,
                 path: '/',
                 timeout: 10000,
-                protocol: 'HTTPS',
+                protocol: 'https:', // Changed from 'HTTPS' to 'https:'
                 rejectUnauthorized: false,
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
@@ -99,7 +99,7 @@ async function checkSite(domain) {
                 port: 80,
                 path: '/',
                 timeout: 10000,
-                protocol: 'HTTP',
+                protocol: 'http:', // Changed from 'HTTP' to 'http:'
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
                 }
