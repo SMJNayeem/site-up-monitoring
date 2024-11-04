@@ -8,7 +8,7 @@ The monitoring system consists of three main components working in harmony to pr
 
 The monitor service is designed to automatically discover sites by scanning directories and reading environment files, eliminating the need for manual configuration when adding new sites. It operates using a simple yet effective health check mechanism that attempts both HTTPS and HTTP connections to determine site availability.
 
-![alt text](<Untitled diagram-2024-11-03-090553.png>)
+![alt text](<images/Untitled diagram-2024-11-03-090553.png>)
 
 
 ### Component Breakdown
@@ -41,7 +41,7 @@ The monitoring process follows a continuous cycle:
 
 6. This cycle repeats based on Prometheus's scrape interval (default: 1 minute).
 
-![alt text](<Untitled diagram-2024-11-03-083438.png>)
+![alt text](<images/Untitled diagram-2024-11-03-083438.png>)
 
 
 ### Security Architecture
@@ -83,69 +83,22 @@ npm install express prom-client
 2. Create the monitor service file:
 ```bash
 nano monitor.js
-# Copy the monitor service code
 ```
+Copy the code for monitor.js
+
 
 3. Set up the systemd service for automatic startup:
 ```bash
 sudo nano /etc/systemd/system/site-monitor.service
 ```
-
-Add the following content:
-```ini
-[Unit]
-Description=Customer Sites Monitor
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/node path/to/monitor.js
-Restart=always
-User=root
-Environment=NODE_ENV=production
-WorkingDirectory=path/to/site-monitor
-
-[Install]
-WantedBy=multi-user.target
-```
+Copy the site-monitor service code
 
 4. Enhance the Prometheus service security by updating the systemd service file:
 ```bash
 sudo nano /etc/systemd/system/prometheus.service
 ```
+Copy the prometheus service code
 
-Add the following content:
-```ini
-[Unit]
-Description=Prometheus
-After=network.target
-
-[Service]
-User=prometheus
-Group=prometheus
-Type=simple
-ExecStart=/usr/local/bin/prometheus \
-    --config.file=/etc/prometheus/prometheus.yml \
-    --storage.tsdb.path=/var/lib/prometheus \
-    --web.listen-address=127.0.0.1:9090 \
-    --web.enable-lifecycle
-
-# Security enhancements
-NoNewPrivileges=true
-ProtectHome=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/prometheus
-ProtectHostname=true
-ProtectControlGroups=true
-ProtectKernelModules=true
-ProtectKernelTunables=true
-LockPersonality=true
-RestrictRealtime=true
-RestrictNamespaces=true
-MemoryDenyWriteExecute=true
-
-[Install]
-WantedBy=multi-user.target
-```
 
 4. Install and configure Prometheus:
 ```bash
@@ -157,21 +110,8 @@ sudo apt-get install prometheus
 ```bash
 sudo nano /etc/prometheus/prometheus.yml
 ```
+Copy the code for prometheus.yml
 
-Add the following configuration:
-```yaml
-global:
-  scrape_interval: 1m
-
-scrape_configs:
-  - job_name: 'sites'
-    static_configs:
-      - targets: ['localhost:9092']
-    metric_relabel_configs:
-      - source_labels: [__name__]
-        regex: 'site_up'
-        action: keep
-```
 
 6. Start the services:
 ```bash

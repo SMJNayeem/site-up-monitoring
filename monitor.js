@@ -9,14 +9,13 @@ const app = express();
 const register = new prom.Registry();
 prom.collectDefaultMetrics = () => { };
 
-// Configuration
 const CONFIG = {
     baseDir: '/root/projects/',  // Update this to your base directory
-    excludeDirs: ['core', '_db', '_migration'],  // Directories to exclude
+    excludeDirs: ['core', '_db', '_migration', 'devops'],  // Directories to exclude
     port: 9092
 };
 
-// Create the metric
+
 const siteStatus = new prom.Gauge({
     name: 'site_up',
     help: 'Site status: 1 = up, 0 = down',
@@ -27,36 +26,16 @@ register.registerMetric(siteStatus);
 
 async function checkSite(domain) {
     return new Promise((resolve) => {
-        const timeout = 3000;
+        const timeout = 5000;
         let isResolved = false;
 
-        const httpCheck = () => {
-            const httpReq = http.get({
-                hostname: domain,
-                path: '/',
-                timeout: timeout,
-                headers: {
-                    'User-Agent': 'Monitor/1.0'
-                }
-            }, (res) => {
-                if (!isResolved) {
-                    isResolved = true;
-                    res.destroy();
-                    resolve(true);
-                }
-            });
-
-            httpReq.on('error', () => {
-                if (!isResolved) {
-                    isResolved = true;
-                    resolve(false);
-                }
-            });
-
-            httpReq.on('timeout', () => {
-                httpReq.destroy();
-            });
+        const safeResolve = (value) => {
+            if (!isResolved) {
+                isResolved = true;
+                resolve(value);
+            }
         };
+
 
         const httpsReq = https.get({
             hostname: domain,
@@ -64,32 +43,51 @@ async function checkSite(domain) {
             timeout: timeout,
             rejectUnauthorized: false,
             headers: {
-                'User-Agent': 'Monitor/1.0'
+                'User-Agent': 'Mozilla/5.0 Site Monitor',
+                'Accept': '*/*'
             }
         }, (res) => {
+            // Any response is considered up, even redirects
             if (!isResolved) {
-                isResolved = true;
                 res.destroy();
-                resolve(true);
+                safeResolve(true);
             }
         });
 
-        httpsReq.on('error', () => {
-            httpCheck();
+        httpsReq.on('error', (err) => {
+            console.log(`HTTPS failed for ${domain}, trying HTTP: ${err.message}`);
+
+            const httpReq = http.get({
+                hostname: domain,
+                path: '/',
+                timeout: timeout,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 Site Monitor',
+                    'Accept': '*/*'
+                }
+            }, (res) => {
+                if (!isResolved) {
+                    res.destroy();
+                    safeResolve(true);
+                }
+            });
+
+            httpReq.on('error', (err) => {
+                console.log(`HTTP failed for ${domain}: ${err.message}`);
+                safeResolve(false);
+            });
+
+            httpReq.on('timeout', () => {
+                httpReq.destroy();
+                safeResolve(false);
+            });
         });
 
         httpsReq.on('timeout', () => {
             httpsReq.destroy();
-            httpCheck();
+            // Don't resolve here, let the error handler try HTTP
         });
-
-        // Global timeout
-        setTimeout(() => {
-            if (!isResolved) {
-                isResolved = true;
-                resolve(false);
-            }
-        }, timeout * 2);
+        setTimeout(() => safeResolve(false), timeout * 2);
     });
 }
 
@@ -153,31 +151,49 @@ app.get('/metrics', async (req, res) => {
         const sites = await findSites();
         console.log(`Found ${sites.length} sites to check`);
 
-        // Process more sites in parallel with shorter timeouts
-        const chunkSize = 50;
+        let downSites = [];
+        const chunkSize = 20;
         const chunks = [];
 
         for (let i = 0; i < sites.length; i += chunkSize) {
             chunks.push(sites.slice(i, i + chunkSize));
         }
 
-        // Process chunks in parallel
-        await Promise.all(chunks.map(async (chunk) => {
+        for (const chunk of chunks) {
             await Promise.all(chunk.map(async (site) => {
                 try {
+                    const startTime = Date.now();
                     const isUp = await checkSite(site.domain);
+                    const duration = Date.now() - startTime;
+
                     siteStatus.labels(site.domain, site.directory).set(isUp ? 1 : 0);
+
+                    if (!isUp) {
+                        downSites.push(site.domain);
+                        console.log(`${site.domain} is DOWN (${duration}ms)`);
+                    }
                 } catch (error) {
                     console.error(`Error checking ${site.domain}:`, error);
                     siteStatus.labels(site.domain, site.directory).set(0);
+                    downSites.push(site.domain);
                 }
             }));
-        }));
+
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
 
         const metrics = await register.metrics();
+        const summary = `
+# HELP site_status_summary Summary of site status checks
+# TYPE site_status_summary gauge
+# Total sites checked: ${sites.length}
+# Total sites down: ${downSites.length}
+# Down sites: ${downSites.length > 0 ? downSites.join(', ') : 'None'}
+`;
+
         res.set('Content-Type', register.contentType);
         res.set('Connection', 'close');
-        res.end(metrics);
+        res.end(metrics + '\n' + summary);
 
     } catch (error) {
         console.error('Error serving metrics:', error);
@@ -185,7 +201,6 @@ app.get('/metrics', async (req, res) => {
     }
 });
 
-// Debug endpoint
 app.get('/debug', async (req, res) => {
     try {
         const sites = await findSites();
@@ -205,7 +220,6 @@ app.get('/debug', async (req, res) => {
     }
 });
 
-// Individual site test endpoint
 app.get('/test/:domain', async (req, res) => {
     const domain = req.params.domain;
     try {
