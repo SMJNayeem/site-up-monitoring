@@ -1,0 +1,117 @@
+// Add this new endpoint to your existing monitor.js
+app.get('/status', async (req, res) => {
+    try {
+        // Use server-sent events for real-time updates
+        res.setHeader('Content-Type', 'text/html');
+        res.write(`
+        <html>
+        <head>
+            <title>Real-time Site Status</title>
+            <style>
+                .up { color: green; }
+                .down { color: red; }
+                table { border-collapse: collapse; width: 100%; }
+                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                th { background-color: #f2f2f2; }
+                .refresh { margin: 10px 0; }
+                .stats { margin-bottom: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="stats" id="stats"></div>
+            <button class="refresh" onclick="checkSites()">Refresh Now</button>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Directory</th>
+                        <th>Status</th>
+                        <th>Last Checked</th>
+                    </tr>
+                </thead>
+                <tbody id="statusTable">
+                </tbody>
+            </table>
+
+            <script>
+            function checkSites() {
+                fetch('/realtime-status')
+                    .then(response => response.json())
+                    .then(data => {
+                        const table = document.getElementById('statusTable');
+                        const stats = document.getElementById('stats');
+                        table.innerHTML = '';
+                        
+                        let upCount = 0;
+                        let totalSites = data.length;
+                        
+                        data.forEach(site => {
+                            if(site.status === 'UP') upCount++;
+                            const row = table.insertRow();
+                            row.innerHTML = `
+            < td > ${ site.domain }</td >
+                                <td>${site.directory}</td>
+                                <td class="${site.status.toLowerCase()}">${site.status}</td>
+                                <td>${site.lastChecked}</td>
+                            `;
+                        });
+                        
+                        stats.innerHTML = `
+            < strong > Total Sites:</strong > ${ totalSites } | 
+                            <strong>Up:</strong> <span class="up">${upCount}</span> | 
+                            <strong>Down:</strong> <span class="down">${totalSites - upCount}</span>
+                        `;
+                    });
+            }
+            
+            // Initial check
+            checkSites();
+            
+            // Refresh every 30 seconds
+            setInterval(checkSites, 30000);
+            </script>
+        </body>
+        </html>
+        `);
+        res.end();
+    } catch (error) {
+        res.status(500).send('Error loading status page');
+    }
+});
+
+// Add the realtime status endpoint
+app.get('/realtime-status', async (req, res) => {
+    try {
+        const sites = await findSites();
+        const results = await Promise.all(sites.map(async (site) => {
+            try {
+                const isUp = await checkSite(site.domain);
+                return {
+                    domain: site.domain,
+                    directory: site.directory,
+                    status: isUp ? 'UP' : 'DOWN',
+                    lastChecked: new Date().toLocaleString()
+                };
+            } catch (error) {
+                return {
+                    domain: site.domain,
+                    directory: site.directory,
+                    status: 'DOWN',
+                    lastChecked: new Date().toLocaleString()
+                };
+            }
+        }));
+
+        // Sort results: DOWN sites first, then alphabetically
+        results.sort((a, b) => {
+            if (a.status !== b.status) {
+                return a.status === 'DOWN' ? -1 : 1;
+            }
+            return a.domain.localeCompare(b.domain);
+        });
+
+        res.json(results);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to check sites' });
+    }
+});
