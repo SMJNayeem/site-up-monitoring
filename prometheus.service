@@ -6,6 +6,7 @@ After=network.target
 User=prometheus
 Group=prometheus
 Type=simple
+Environment=TZ=Asia/Dhaka 
 ExecStart=/usr/bin/prometheus \
     --config.file=/etc/prometheus/prometheus.yml \
     --storage.tsdb.path=/var/lib/prometheus \

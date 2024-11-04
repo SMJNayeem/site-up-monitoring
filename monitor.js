@@ -11,8 +11,8 @@ prom.collectDefaultMetrics = () => { };
 
 // Configuration
 const CONFIG = {
-    baseDir: '/root',  // Update this to your base directory
-    excludeDirs: ['core', 'nginx'],  // Directories to exclude
+    baseDir: '/root/projects/',  // Update this to your base directory
+    excludeDirs: ['core', '_db', '_migration'],  // Directories to exclude
     port: 9092
 };
 
@@ -27,47 +27,69 @@ register.registerMetric(siteStatus);
 
 async function checkSite(domain) {
     return new Promise((resolve) => {
-        // First try HTTPS
-        const httpsReq = https.get({
-            hostname: domain,
-            path: '/',
-            timeout: 5000,
-            rejectUnauthorized: false // Allow self-signed certificates
-        }, (res) => {
-            console.log(`HTTPS check for ${domain}: UP (status: ${res.statusCode})`);
-            res.resume();
-            resolve(true);
-        });
+        const timeout = 3000;
+        let isResolved = false;
 
-        httpsReq.on('error', () => {
-            // If HTTPS fails, try HTTP
+        const httpCheck = () => {
             const httpReq = http.get({
                 hostname: domain,
                 path: '/',
-                timeout: 5000
+                timeout: timeout,
+                headers: {
+                    'User-Agent': 'Monitor/1.0'
+                }
             }, (res) => {
-                console.log(`HTTP check for ${domain}: UP (status: ${res.statusCode})`);
-                res.resume();
-                resolve(true);
+                if (!isResolved) {
+                    isResolved = true;
+                    res.destroy();
+                    resolve(true);
+                }
             });
 
-            httpReq.on('error', (err) => {
-                console.log(`All checks failed for ${domain}: ${err.message}`);
-                resolve(false);
+            httpReq.on('error', () => {
+                if (!isResolved) {
+                    isResolved = true;
+                    resolve(false);
+                }
             });
 
             httpReq.on('timeout', () => {
-                console.log(`HTTP check timeout for ${domain}`);
                 httpReq.destroy();
-                resolve(false);
             });
+        };
+
+        const httpsReq = https.get({
+            hostname: domain,
+            path: '/',
+            timeout: timeout,
+            rejectUnauthorized: false,
+            headers: {
+                'User-Agent': 'Monitor/1.0'
+            }
+        }, (res) => {
+            if (!isResolved) {
+                isResolved = true;
+                res.destroy();
+                resolve(true);
+            }
+        });
+
+        httpsReq.on('error', () => {
+            httpCheck();
         });
 
         httpsReq.on('timeout', () => {
-            console.log(`HTTPS check timeout for ${domain}`);
             httpsReq.destroy();
-            // Don't resolve here, let the error handler try HTTP
+            httpCheck();
         });
+
+        // Global timeout
+        setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true;
+                resolve(false);
+            }
+        }, timeout * 2);
     });
 }
 
@@ -77,7 +99,6 @@ async function findSites() {
         const sites = [];
 
         for (const dir of directories) {
-            // Skip excluded directories
             if (CONFIG.excludeDirs.includes(dir)) {
                 console.log(`Skipping excluded directory: ${dir}`);
                 continue;
@@ -124,36 +145,40 @@ async function findSites() {
     }
 }
 
-// Metrics endpoint
 app.get('/metrics', async (req, res) => {
     try {
-        // Reset metrics before collecting new data
+        console.log('Starting metrics collection...');
         siteStatus.reset();
 
         const sites = await findSites();
+        console.log(`Found ${sites.length} sites to check`);
 
-        // Check all sites in parallel
-        await Promise.all(sites.map(async (site) => {
-            try {
-                const isUp = await checkSite(site.domain);
-                console.log(`Status for ${site.domain} (${site.directory}) = ${isUp ? 'UP' : 'DOWN'}`);
+        // Process more sites in parallel with shorter timeouts
+        const chunkSize = 50;
+        const chunks = [];
 
-                siteStatus.set({
-                    domain: site.domain,
-                    directory: site.directory
-                }, isUp ? 1 : 0);
-            } catch (error) {
-                console.error(`Error checking ${site.domain}:`, error);
-                siteStatus.set({
-                    domain: site.domain,
-                    directory: site.directory
-                }, 0);
-            }
+        for (let i = 0; i < sites.length; i += chunkSize) {
+            chunks.push(sites.slice(i, i + chunkSize));
+        }
+
+        // Process chunks in parallel
+        await Promise.all(chunks.map(async (chunk) => {
+            await Promise.all(chunk.map(async (site) => {
+                try {
+                    const isUp = await checkSite(site.domain);
+                    siteStatus.labels(site.domain, site.directory).set(isUp ? 1 : 0);
+                } catch (error) {
+                    console.error(`Error checking ${site.domain}:`, error);
+                    siteStatus.labels(site.domain, site.directory).set(0);
+                }
+            }));
         }));
 
         const metrics = await register.metrics();
         res.set('Content-Type', register.contentType);
+        res.set('Connection', 'close');
         res.end(metrics);
+
     } catch (error) {
         console.error('Error serving metrics:', error);
         res.status(500).send('Error collecting metrics');
